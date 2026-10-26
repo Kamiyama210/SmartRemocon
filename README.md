@@ -1,8 +1,7 @@
 # エアコン自動制御装置
 
 **室温を監視して赤外線でエアコンを自動制御する**システム。  
-MQTT経由でPCアプリから遠隔操作・監視も可能。  
-室温が落ち着いたタイミングを検出してから暑いor寒いを判定。  
+MQTT経由でPCアプリから遠隔操作・監視も可能。   
 
 ```mermaid
 flowchart LR
@@ -31,7 +30,7 @@ src/
 │   └── wdt_monitor.c   ウォッチドッグ
 ├── modules/            モジュール層
 ├── utils/              Util層
-└── wrappers/           ラッパー層：SDK, FreeRTOS, lwIPの抽象化
+└── wrappers/           ラッパー層
 ```
 
 ## レイヤ構成図
@@ -61,16 +60,16 @@ flowchart LR
     subgraph RTOS["FreeRTOS"]
         ST["Startup<br>スタートアップ"]
         NET["Network<br>MQTT＆WIFI制御"]
-        CTRL["Control<br>センサ読取＆空調制御"]
+        CTRL["Control<br>センサ読取＆エアコン制御"]
         WDT["WDT_Monitor<br>タスク監視"]
     end
 
     subgraph HW["ハードウェア"]
-        BME["BME280<br>I2C"]
-        IR["IR LED<br>PIO 38kHz"]
+        BME["BME280(温度センサ)"]
+        IR["赤外線LED"]
     end
 
-    subgraph SERVER["サーバー"]
+    subgraph SERVER["サーバ"]
         MQTT["MQTT"]
     end
 
@@ -100,9 +99,9 @@ stateDiagram-v2
 
     WIFI_INIT --> TEARDOWN: 開始失敗
     WIFI_WAIT --> TEARDOWN: 失敗
-    MQTT_INIT --> TEARDOWN: 開始失敗orWi-Fi断
+    MQTT_INIT --> TEARDOWN: 開始失敗/Wi-Fi断
     MQTT_WAIT --> TEARDOWN: 失敗
-    MQTT_PROCESS --> TEARDOWN: 切断or送信失敗3回
+    MQTT_PROCESS --> TEARDOWN: 切断/送信失敗3回
 
     TEARDOWN --> RETRY_DELAY: mqtt_stop / wifi_stop
     RETRY_DELAY --> WIFI_INIT: 待機終了
@@ -143,6 +142,6 @@ stateDiagram-v2
 **補足**
 - IDLEは起動時に既に適温だったときの待機で、室温が外れれば自動で運転を始める。
 - OFFはPCからの停止操作による停止で、次の運転操作を受けるまで自動では運転しない。
-- FAULTの間は室温がわからないため、運転操作は受け付けず、停止操作だけを受け付ける。
 - FAULT以外の状態で運転操作を受けるとSETTLINGに移る。
+- FAULTの間は運転操作は受け付けない。
 - OFFは再起動すると解除され、INITから始まる。
