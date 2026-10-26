@@ -1,0 +1,69 @@
+;
+; ir_tx.pio：赤外線リモコン送信用PIOプログラム
+;
+; FIFOへ32bitワードを1パルスにつき1個入れる。
+;   bit 31    ：搬送波を出すか（1=MARK / 0=SPACE）
+;   bit 30..0 ：継続時間（搬送波の周期数）
+;
+; 1命令=1サイクルで、搬送波1周期を3命令で作る（SMクロック=搬送波×3）。
+; MARKのデューティは1/3。
+;
+
+.program ir_tx
+.side_set 1 opt          ; 1bitのサイドセットでIR LEDを駆動
+
+.define PUBLIC CYCLES_PER_CARRIER 3    ; 搬送波1周期の命令数
+.define PUBLIC WORD_BITS 32            ; FIFOの1ワードのビット数
+.define DURATION_BITS 31               ; 継続時間のビット数
+.define MARK_BITS 1                    ; 点灯・消灯を表すビット数
+
+; パルス1個分のワードを取り込み、MARKなら搬送波を出すループ、SPACEなら消灯のループへ進む。
+get_pulse:
+    out x, DURATION_BITS side 0   ; 下位31bitを周期数としてxへ。LEDは消灯
+    out y, MARK_BITS              ; bit31をyへ（1=MARK）
+    jmp !y, space_loop            ; SPACEなら消灯のループへ
+
+; MARK：1サイクル点灯、2サイクル消灯を1周期として繰り返す。
+mark_loop:
+    nop                  side 1   ; 点灯
+    nop                  side 0   ; 消灯
+    jmp x--, mark_loop            ; 残りの周期数を減らす
+    jmp get_pulse                 ; 次のパルスへ
+
+; SPACE：MARKと同じ3サイクルを1周期として、消灯のまま繰り返す。
+space_loop:
+    nop                  side 0   ; 消灯
+    nop                  side 0   ; 消灯
+    jmp x--, space_loop           ; 残りの周期数を減らす
+    jmp get_pulse                 ; 次のパルスへ
+
+
+% c-sdk {
+
+#include "hardware/clocks.h"
+
+/** IR送信用のステートマシンを初期化して開始する。SMクロックはcarrier_hzの3倍にする。 */
+static inline void ir_tx_program_init(PIO pio, uint sm, uint offset,
+                                      uint pin, uint carrier_hz) {
+    pio_sm_config c = ir_tx_program_get_default_config(offset);
+
+    /* サイドセットでIR LEDのピンを駆動する */
+    sm_config_set_sideset_pins(&c, pin);
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+
+    /* OSRは右シフト。32bitを使い切ったらFIFOから自動で次のワードを取り込む */
+    sm_config_set_out_shift(&c, true, true, ir_tx_WORD_BITS);
+
+    /* RX FIFOを使わないので、TX FIFOに結合して8段にする */
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    /* 搬送波1周期をCYCLES_PER_CARRIER命令で作るように分周する */
+    float div = (float)clock_get_hz(clk_sys) / (float)(carrier_hz * ir_tx_CYCLES_PER_CARRIER);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+%}
